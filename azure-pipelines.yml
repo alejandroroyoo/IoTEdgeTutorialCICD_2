@@ -1,0 +1,60 @@
+trigger:
+- main
+
+stages:
+- stage: Build
+  jobs:
+  - job: J1
+    pool:
+      vmImage: ubuntu-22.04
+    steps:
+    - script: |
+        cd ./modules/$(MODULE_NAME)
+        dotnet publish --os linux --arch x64 /t:PublishContainer
+      displayName: 'Build Docker Image'
+
+    - script: |
+        docker login -u $(CONTAINER_REGISTRY_USERNAME) -p $(CONTAINER_REGISTRY_PASSWORD) $(CONTAINER_REGISTRY_ADDRESS)
+        docker tag $(MODULE_NAME) $(CONTAINER_REGISTRY_ADDRESS)/$(MODULE_NAME):$(MODULE_VERSION)
+        docker push $(CONTAINER_REGISTRY_ADDRESS)/$(MODULE_NAME):$(MODULE_VERSION)
+      displayName: 'Push Docker Image'
+
+- stage: Release
+  jobs:
+  - job: J2
+    pool:
+      vmImage: ubuntu-22.04
+    steps:
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y software-properties-common
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        sudo apt-get update
+        sudo apt-get install -y python3.9 python3.9-distutils
+        curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+        python3.9 get-pip.py
+        python3.9 -m pip install -U iotedgedev pyOpenSSL==22.0.0 urllib3==1.22 requests
+      displayName: 'Install iotedgedev'
+
+    - task: AzureIoTEdge@2
+      inputs:
+        action: 'Generate deployment manifest'
+        templateFilePath: 'deployment.template.json'
+        defaultPlatform: 'amd64'
+        deploymentManifestOutputPath: '$(System.DefaultWorkingDirectory)/config/deployment.json'
+        validateGeneratedDeploymentManifest: 'false'
+      env:
+        CONTAINER_REGISTRY_PASSWORD: $(CONTAINER_REGISTRY_PASSWORD)
+      displayName: 'Generate Deployment manifest'
+
+    - task: AzureIoTEdge@2
+      inputs:
+        action: 'Deploy to IoT Edge devices'
+        deploymentFilePath: '$(System.DefaultWorkingDirectory)/config/deployment.json'
+        azureSubscription: 'Azure for Students(04dfd491-0c45-41c3-9905-63e3be417477)'
+        iothubname: 'myiothubarl0248'
+        deploymentid: '$(System.TeamProject)-devops-deployment'
+        priority: '0'
+        deviceOption: 'Single Device'
+        deviceId: 'edgedeviceidentityaroyo'
+      displayName: 'Deploy to IoT Edge devices'
